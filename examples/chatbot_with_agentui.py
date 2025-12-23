@@ -11,10 +11,15 @@ To use this chatbot:
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 from egile_agent_core import Agent
 from egile_agent_core.models import OpenAI, XAI
 from egile_agent_core.server import AgentServer
+
+# Load environment variables from .env file
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
 
 
 def main():
@@ -23,7 +28,7 @@ def main():
     agents = [
         Agent(
             name="helpful-assistant",
-            model=XAI(model="grok-beta") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
             description="A helpful AI assistant that can answer questions and help with tasks.",
             system_prompt=(
                 "You are a helpful, friendly AI assistant. "
@@ -33,7 +38,7 @@ def main():
         ),
         Agent(
             name="code-expert",
-            model=XAI(model="grok-beta") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
             description="An expert programmer who can help with coding questions and debugging.",
             system_prompt=(
                 "You are an expert programmer with deep knowledge of multiple languages. "
@@ -43,7 +48,7 @@ def main():
         ),
         Agent(
             name="creative-writer",
-            model=XAI(model="grok-beta") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
             description="A creative writing assistant for stories, poems, and content creation.",
             system_prompt=(
                 "You are a creative writing assistant with a flair for storytelling. "

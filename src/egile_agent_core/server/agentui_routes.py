@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Form
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -118,7 +118,13 @@ def create_agentui_router(agents: dict[str, Agent]) -> APIRouter:
         return agent_details
 
     @router.post("/agents/{agent_id}/runs")
-    async def run_agent(agent_id: str, request: RunRequest) -> EventSourceResponse:
+    async def run_agent(
+        agent_id: str,
+        message: str = Form(...),
+        stream: str = Form("true"),
+        session_id: str | None = Form(None),
+        user_id: str | None = Form(None),
+    ) -> EventSourceResponse:
         """
         Run an agent and stream the response in Agent UI format.
 
@@ -127,7 +133,10 @@ def create_agentui_router(agents: dict[str, Agent]) -> APIRouter:
 
         Args:
             agent_id: The unique identifier for the agent
-            request: Run request containing the user's message
+            message: The user's message (from FormData)
+            stream: Whether to stream the response (from FormData)
+            session_id: Optional session ID (from FormData)
+            user_id: Optional user ID (from FormData)
 
         Returns:
             EventSourceResponse with streaming events
@@ -146,7 +155,7 @@ def create_agentui_router(agents: dict[str, Agent]) -> APIRouter:
 
         # Generate IDs
         run_id = str(uuid.uuid4())
-        session_id = request.session_id or str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
 
         # Store message in session
         if session_id not in sessions:
@@ -155,7 +164,7 @@ def create_agentui_router(agents: dict[str, Agent]) -> APIRouter:
         sessions[session_id].append(
             {
                 "role": "user",
-                "content": request.message,
+                "content": message,
                 "created_at": int(datetime.now().timestamp() * 1000),
             }
         )
@@ -179,7 +188,7 @@ def create_agentui_router(agents: dict[str, Agent]) -> APIRouter:
 
                 # Stream the agent response
                 full_content = ""
-                async for chunk in agent.stream(request.message):
+                async for chunk in agent.stream(message):
                     full_content += chunk
 
                     # Send RunContent event for each chunk
