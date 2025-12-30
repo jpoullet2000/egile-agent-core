@@ -24,14 +24,14 @@ class XAI(BaseLLM):
         ```python
         from egile_agent_core.models import XAI
 
-        model = XAI(model="grok-beta")
+        model = XAI(model="grok-4-1-fast-reasoning")
         response = await model.generate([
             {"role": "user", "content": "Hello!"}
         ])
         ```
     """
 
-    model: str = "grok-beta"
+    model: str = "grok-4-1-fast-reasoning"
     temperature: float = 0.7
     max_tokens: int | None = None
     api_key: str | None = None

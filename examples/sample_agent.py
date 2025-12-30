@@ -49,7 +49,7 @@ async def demo_single_turn():
     # Create agent with xAI (preferred)
     agent = Agent(
         name="demo-agent",
-        model=XAI(model="grok-beta"),
+        model=XAI(model="grok-4-1-fast-reasoning"),
         system_prompt="You are a helpful assistant. Be concise.",
         plugins=[LoggingPlugin()],
     )
@@ -70,7 +70,7 @@ async def demo_streaming():
 
     agent = Agent(
         name="stream-agent",
-        model=XAI(model="grok-beta"),
+        model=XAI(model="grok-4-1-fast-reasoning"),
         system_prompt="You are a helpful assistant.",
     )
 
@@ -93,7 +93,7 @@ def run_server():
     agents = [
         Agent(
             name="grok",
-            model=XAI(model="grok-beta"),
+            model=XAI(model="grok-4-1-fast-reasoning"),
             description="General purpose assistant powered by xAI Grok",
             system_prompt="You are Grok, a helpful AI assistant. Be witty and informative.",
         ),

@@ -22,7 +22,7 @@ In this project directory (`egile-agent-core`):
 python examples\chatbot_with_agentui.py
 ```
 
-The server will start on `http://localhost:7860` with:
+The server will start on `http://localhost:8000` with:
 - Agent UI compatible endpoints at the root (`/agents`, `/health`, etc.)
 - Original API endpoints at `/v1/agents`
 - Interactive docs at `/docs`
@@ -39,7 +39,7 @@ Create or update `.env.local`:
 
 ```env
 # Point Agent UI to your egile-agent-core backend
-NEXT_PUBLIC_AGENTOS_URL=http://localhost:7860
+NEXT_PUBLIC_AGENTOS_URL=http://localhost:8000
 
 # Optional: Set auth token if needed
 # NEXT_PUBLIC_AUTH_TOKEN=your-token-here
@@ -94,7 +94,7 @@ Edit `examples/chatbot_with_agentui.py` to add more agents:
 ```python
 Agent(
     name="your-agent-name",
-    model=XAI(model="grok-beta"),
+    model=XAI(model="grok-4-1-fast-reasoning"),
     description="A brief description shown in Agent UI",
     system_prompt="Your agent's system prompt...",
 )
@@ -111,7 +111,7 @@ from egile_agent_core.models import OpenAI, XAI, AzureOpenAI, Mistral
 model=OpenAI(model="gpt-4o")
 
 # XAI
-model=XAI(model="grok-beta")
+model=XAI(model="grok-4-1-fast-reasoning")
 
 # Azure OpenAI
 model=AzureOpenAI(
@@ -136,7 +136,7 @@ class MyPlugin(Plugin):
 
 agent = Agent(
     name="enhanced-agent",
-    model=XAI(model="grok-beta"),
+    model=XAI(model="grok-4-1-fast-reasoning"),
     plugins=[MyPlugin()],
 )
 ```
@@ -145,14 +145,14 @@ agent = Agent(
 
 ### Agent UI can't connect to backend
 
-1. Verify backend is running: `curl http://localhost:7860/health`
+1. Verify backend is running: `curl http://localhost:8000/health`
 2. Check `.env.local` has correct URL
 3. Ensure CORS is enabled (it is by default)
 
 ### No agents showing in UI
 
 1. Check backend logs for errors
-2. Verify `/agents` endpoint: `curl http://localhost:7860/agents`
+2. Verify `/agents` endpoint: `curl http://localhost:8000/agents`
 3. Make sure you have valid API keys in `.env`
 
 ### Streaming not working

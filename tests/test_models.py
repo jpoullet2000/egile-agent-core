@@ -40,9 +40,9 @@ class TestXAI:
 
     def test_xai_defaults(self):
         model = XAI()
-        assert model.model == "grok-beta"
+        assert model.model == "grok-4-1-fast-reasoning"
         assert model.provider_name == "xai"
-        assert model.model_name == "xai/grok-beta"
+        assert model.model_name == "xai/grok-4-1-fast-reasoning"
 
     def test_xai_custom_model(self):
         model = XAI(model="grok-2")

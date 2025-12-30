@@ -24,7 +24,7 @@ def main() -> None:
     # Create a default agent
     default_agent = Agent(
         name="default",
-        model=XAI(model="grok-beta"),
+        model=XAI(model="grok-4-1-fast-reasoning"),
         description="Default Egile agent powered by xAI Grok",
         system_prompt="You are a helpful AI assistant.",
     )

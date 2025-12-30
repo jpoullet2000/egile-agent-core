@@ -31,7 +31,7 @@ from egile_agent_core.server import AgentServer
 # Create an agent with xAI (Grok)
 agent = Agent(
     name="my-agent",
-    model=XAI(model="grok-beta"),
+    model=XAI(model="grok-4-1-fast-reasoning"),
     system_prompt="You are a helpful assistant.",
 )
 
@@ -59,6 +59,74 @@ export AZURE_OPENAI_DEPLOYMENT=your-deployment-name
 # Mistral
 export MISTRAL_API_KEY=your-mistral-key
 ```
+
+Or create a `.env` file in your project root:
+```bash
+XAI_API_KEY=your-xai-key
+```
+
+## Running the Server
+
+### Option 1: Using the Example Script (Quickest)
+
+Run the provided example with pre-configured agents:
+
+```bash
+python examples/chatbot_with_agentui.py
+```
+
+This starts a server on port 8000 with multiple agents and provides Agent UI integration.
+
+### Option 2: Creating Your Own Server
+
+Create a Python script:
+
+```python
+from egile_agent_core import Agent
+from egile_agent_core.models import XAI
+from egile_agent_core.server import AgentServer
+
+# Create an agent
+agent = Agent(
+    name="my-agent",
+    model=XAI(model="grok-4-1-fast-reasoning"),
+    system_prompt="You are a helpful assistant.",
+)
+
+# Create and run the server
+server = AgentServer(agents=[agent])
+server.serve(host="0.0.0.0", port=8000)
+```
+
+Then run:
+```bash
+python your_script.py
+```
+
+### Option 3: Using Uvicorn Directly
+
+For more control (with auto-reload for development):
+
+```bash
+uvicorn your_module:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Server Configuration
+
+The `serve()` method accepts these parameters:
+
+- `host`: Host to bind to (default: `"0.0.0.0"`)
+- `port`: Port to bind to (default: `8000`)
+- `reload`: Enable auto-reload for development (default: `False`)
+- `log_level`: Uvicorn log level (default: `"info"`)
+
+### Accessing Your Server
+
+Once running, you can access:
+- **API Documentation**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+- **Original API**: http://localhost:8000/v1/
+- **Agent UI Compatible API**: http://localhost:8000/
 
 ## API Endpoints
 

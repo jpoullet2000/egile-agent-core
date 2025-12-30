@@ -47,7 +47,7 @@ class Agent:
 
         agent = Agent(
             name="my-agent",
-            model=XAI(model="grok-beta"),
+            model=XAI(model="grok-4-1-fast-reasoning"),
             system_prompt="You are a helpful assistant.",
         )
 
