@@ -1,8 +1,8 @@
-"""FastAPI server runtime for Egile Agent Core."""
+"""AgentOS server runtime for Egile Agent Core."""
 
-from egile_agent_core.server.app import AgentServer
+from egile_agent_core.server.app import AgentServer, create_agent_os
 
-__all__ = ["AgentServer"]
+__all__ = ["AgentServer", "create_agent_os"]
 
 
 def main() -> None:

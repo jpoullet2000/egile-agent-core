@@ -23,8 +23,8 @@ python examples\chatbot_with_agentui.py
 ```
 
 The server will start on `http://localhost:8000` with:
-- Agent UI compatible endpoints at the root (`/agents`, `/health`, etc.)
-- Original API endpoints at `/v1/agents`
+- Agent UI compatible endpoints (AgentOS)
+- Automatic session management with SQLite
 - Interactive docs at `/docs`
 
 ### Step 2: Configure Agent UI
@@ -92,12 +92,16 @@ Original API endpoints are still available at `/v1/*`
 Edit `examples/chatbot_with_agentui.py` to add more agents:
 
 ```python
-Agent(
-    name="your-agent-name",
-    model=XAI(model="grok-4-1-fast-reasoning"),
-    description="A brief description shown in Agent UI",
-    system_prompt="Your agent's system prompt...",
-)
+{
+    "name": "your-agent-name",
+    "model": XAI(model="grok-4-1-fast-reasoning"),
+    "description": "A brief description shown in Agent UI",
+    "instructions": [
+        "Your agent's first instruction...",
+        "Additional instructions...",
+    ],
+    "markdown": True,  # Enable markdown formatting
+}
 ```
 
 ### Changing Models
@@ -120,25 +124,34 @@ model=AzureOpenAI(
 )
 ```
 
-### Adding Plugins
+### Using create_agent_os() Directly
 
-Enhance your agents with custom plugins:
+For more control, create your own script:
 
 ```python
-from egile_agent_core.plugins.base import Plugin
+from egile_agent_core.models import XAI
+from egile_agent_core.server import create_agent_os
 
-class MyPlugin(Plugin):
-    name = "my-plugin"
-    
-    async def before_request(self, message: str, **kwargs) -> str:
-        # Modify message before sending to LLM
-        return message
+agents_config = [
+    {
+        "name": "my-agent",
+        "model": XAI(model="grok-4-1-fast-reasoning"),
+        "description": "My custom agent",
+        "instructions": ["Custom instructions..."],
+        "markdown": True,
+        "debug_mode": False,  # Set to True for debugging
+    }
+]
 
-agent = Agent(
-    name="enhanced-agent",
-    model=XAI(model="grok-4-1-fast-reasoning"),
-    plugins=[MyPlugin()],
+agent_os = create_agent_os(
+    agents_config=agents_config,
+    os_id="my-custom-os",
+    description="My Custom AgentOS",
+    db_file="my_custom_os.db",
+    port=8000,
 )
+
+agent_os.serve(reload=True)  # Auto-reload for development
 ```
 
 ## Troubleshooting
@@ -166,25 +179,49 @@ agent = Agent(
 For production use:
 
 1. **Use environment variables** for configuration
-2. **Add authentication** to protect your API
-3. **Use a proper database** for session storage (replace in-memory dict)
-4. **Set specific CORS origins** instead of allowing all
+2. **Set a production database** path
+3. **Disable auto-reload**
+4. **Use a production WSGI server** (Gunicorn, etc.)
 5. **Enable HTTPS** for secure communication
+6. **Connect to Agno Control Plane** for monitoring (optional)
 
-Example production server setup:
+Example production setup:
 
 ```python
-server = AgentServer(
-    agents=agents,
-    cors_origins=["https://your-domain.com"],
+from egile_agent_core.models import XAI
+from egile_agent_core.server import create_agent_os
+import os
+
+agents_config = [
+    {
+        "name": "production-agent",
+        "model": XAI(model="grok-4-1-fast-reasoning"),
+        "instructions": ["You are a helpful assistant."],
+        "description": "Production agent",
+        "markdown": True,
+        "debug_mode": False,
+    }
+]
+
+agent_os = create_agent_os(
+    agents_config=agents_config,
+    os_id="production-os",
+    description="Production AgentOS",
+    db_file="/var/lib/agent_os/production.db",
+    port=int(os.getenv("PORT", "8000")),
 )
 
-server.serve(
-    host="0.0.0.0",
-    port=8000,
-    reload=False,
-    log_level="warning",
-)
+# Get the FastAPI app for use with Gunicorn
+app = agent_os.get_app()
+
+# Or run directly
+if __name__ == "__main__":
+    agent_os.serve(reload=False)
+```
+
+Run with Gunicorn:
+```bash
+gunicorn your_module:app --workers 4 --bind 0.0.0.0:8000
 ```
 
 ## Learn More

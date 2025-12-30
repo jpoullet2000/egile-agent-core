@@ -24,18 +24,35 @@ pip install egile-agent-core[mistral]
 ## Quick Start
 
 ```python
+from egile_agent_core.models import XAI
+from egile_agent_core.server import create_agent_os
+
+# Configure an agent with xAI (Grok)
+agents_config = [{
+    "name": "my-agent",
+    "model": XAI(model="grok-4-1-fast-reasoning"),
+    "instructions": ["You are a helpful assistant."],
+    "description": "A helpful AI assistant",
+}]
+
+# Create and run the AgentOS server
+agent_os = create_agent_os(agents_config)
+agent_os.serve()
+```
+
+### Alternative: Using AgentServer (Backward Compatibility)
+
+```python
 from egile_agent_core import Agent
 from egile_agent_core.models import XAI
 from egile_agent_core.server import AgentServer
 
-# Create an agent with xAI (Grok)
 agent = Agent(
     name="my-agent",
     model=XAI(model="grok-4-1-fast-reasoning"),
     system_prompt="You are a helpful assistant.",
 )
 
-# Create and run the server
 server = AgentServer(agents=[agent])
 server.serve()
 ```
@@ -67,7 +84,44 @@ XAI_API_KEY=your-xai-key
 
 ## Running the Server
 
-### Option 1: Using the Example Script (Quickest)
+### Option 1: Using create_agent_os() (Recommended)
+
+The modern approach using Agno's AgentOS framework:
+
+```python
+from egile_agent_core.models import XAI
+from egile_agent_core.server import create_agent_os
+
+# Configure agents
+agents_config = [
+    {
+        "name": "my-agent",
+        "model": XAI(model="grok-4-1-fast-reasoning"),
+        "instructions": ["You are a helpful assistant."],
+        "description": "A helpful AI assistant",
+        "markdown": True,
+    }
+]
+
+# Create and run AgentOS
+agent_os = create_agent_os(
+    agents_config=agents_config,
+    os_id="my-agent-os",
+    description="My AI Agent OS",
+    db_file="agent_os.db",  # Persistent session storage
+    port=8000,
+)
+
+agent_os.serve(reload=True)  # reload=True for development
+```
+
+**Benefits of AgentOS:**
+- Automatic Agent UI compatibility
+- Built-in SQLite session persistence
+- Session management and conversation history
+- Can connect to Agno control plane for monitoring
+
+### Option 2: Using the Example Script (Quickest)
 
 Run the provided example with pre-configured agents:
 
@@ -75,11 +129,11 @@ Run the provided example with pre-configured agents:
 python examples/chatbot_with_agentui.py
 ```
 
-This starts a server on port 8000 with multiple agents and provides Agent UI integration.
+This starts an AgentOS server on port 8000 with multiple agents.
 
-### Option 2: Creating Your Own Server
+### Option 3: Using AgentServer (Backward Compatibility)
 
-Create a Python script:
+For backward compatibility with existing code:
 
 ```python
 from egile_agent_core import Agent
@@ -98,54 +152,48 @@ server = AgentServer(agents=[agent])
 server.serve(host="0.0.0.0", port=8000)
 ```
 
-Then run:
-```bash
-python your_script.py
-```
+### AgentOS Configuration
 
-### Option 3: Using Uvicorn Directly
+The `create_agent_os()` function accepts:
 
-For more control (with auto-reload for development):
-
-```bash
-uvicorn your_module:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Server Configuration
-
-The `serve()` method accepts these parameters:
-
-- `host`: Host to bind to (default: `"0.0.0.0"`)
-- `port`: Port to bind to (default: `8000`)
-- `reload`: Enable auto-reload for development (default: `False`)
-- `log_level`: Uvicorn log level (default: `"info"`)
+- `agents_config`: List of agent configuration dictionaries
+- `os_id`: Unique ID for this AgentOS instance
+- `description`: Description of the AgentOS
+- `db_file`: Path to SQLite database for session storage
+- `port`: Default port (can override in serve())
 
 ### Accessing Your Server
 
 Once running, you can access:
 - **API Documentation**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **Original API**: http://localhost:8000/v1/
 - **Agent UI Compatible API**: http://localhost:8000/
+- **Health Check**: http://localhost:8000/health
+- **Configuration**: http://localhost:8000/config
 
 ## API Endpoints
 
-Once the server is running:
+AgentOS provides these endpoints automatically:
 
-### Original API (v1)
-- `GET /v1/agents` - List available agents
-- `GET /v1/agents/{agent_name}` - Get agent details
-- `POST /v1/agents/{agent_name}/chat` - Chat with an agent
-- `POST /v1/agents/{agent_name}/stream` - Stream chat responses (SSE)
+### Agent Management
+- `GET /agents` - List all available agents
+- `GET /agents/{agent_id}` - Get agent details
 
-### Agent UI Compatible API
-- `GET /agents` - List agents (Agent UI format)
-- `POST /agents/{agent_id}/runs` - Run agent with streaming
+### Agent Interactions
+- `POST /agents/{agent_id}/runs` - Start a conversation (streaming)
+- `GET /agents/{agent_id}/runs/{run_id}` - Get run details
+
+### Session Management
+- `GET /sessions` - List all sessions
+- `GET /sessions/{session_id}` - Get session details
+- `GET /sessions/{session_id}/runs` - Get conversation history
+- `DELETE /sessions/{session_id}` - Delete a session
+
+### System
 - `GET /health` - Health check
-- `GET /sessions` - List sessions
-- `DELETE /sessions/{session_id}` - Delete session
+- `GET /config` - View AgentOS configuration
+- `GET /docs` - Interactive API documentation
 
-See [AGENT_UI_INTEGRATION.md](AGENT_UI_INTEGRATION.md) for connecting with Agent UI.
+See [AGENT_UI_INTEGRATION.md](AGENT_UI_INTEGRATION.md) for Agent UI setup.
 
 ## Creating a Plugin
 

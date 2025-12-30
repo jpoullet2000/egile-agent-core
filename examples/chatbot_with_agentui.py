@@ -1,82 +1,94 @@
-"""Example chatbot using Egile Agent Core with Agent UI integration.
+"""Example chatbot using Egile Agent Core with AgentOS and Agent UI integration.
 
-This example demonstrates how to create a chatbot that works with Agent UI.
-The server provides both the original API endpoints and Agent UI compatible endpoints.
+This example demonstrates how to create a chatbot using Agno's AgentOS framework
+with egile-agent-core's multi-provider LLM support.
+
+The server provides Agent UI compatible endpoints and automatic session management.
 
 To use this chatbot:
 1. Set your API keys in the .env file
 2. Run this script: python examples/chatbot_with_agentui.py
-3. Navigate to the Agent UI and connect to http://localhost:7860
+3. Navigate to the Agent UI and connect to http://localhost:8000
 """
 
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
+import uvicorn
 
-from egile_agent_core import Agent
 from egile_agent_core.models import OpenAI, XAI
-from egile_agent_core.server import AgentServer
+from egile_agent_core.server import create_agent_os
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
+# Configure agents with egile models
+agents_config = [
+    {
+        "name": "helpful-assistant",
+        "model": XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+        "description": "A helpful AI assistant that can answer questions and help with tasks.",
+        "instructions": [
+            "You are a helpful, friendly AI assistant.",
+            "Provide clear, concise answers and always be respectful.",
+            "If you don't know something, admit it honestly.",
+        ],
+        "markdown": True,
+    },
+    {
+        "name": "code-expert",
+        "model": XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+        "description": "An expert programmer who can help with coding questions and debugging.",
+        "instructions": [
+            "You are an expert programmer with deep knowledge of multiple languages.",
+            "Help users write better code, debug issues, and explain technical concepts clearly.",
+            "Always provide code examples when relevant.",
+        ],
+        "markdown": True,
+    },
+    {
+        "name": "creative-writer",
+        "model": XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
+        "description": "A creative writing assistant for stories, poems, and content creation.",
+        "instructions": [
+            "You are a creative writing assistant with a flair for storytelling.",
+            "Help users craft engaging narratives, poetry, and creative content.",
+            "Be imaginative, expressive, and encourage creativity.",
+        ],
+        "markdown": True,
+    },
+]
 
-def main():
-    """Create and serve chatbot agents."""
-    # Create multiple agents with different personalities
-    agents = [
-        Agent(
-            name="helpful-assistant",
-            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
-            description="A helpful AI assistant that can answer questions and help with tasks.",
-            system_prompt=(
-                "You are a helpful, friendly AI assistant. "
-                "Provide clear, concise answers and always be respectful. "
-                "If you don't know something, admit it honestly."
-            ),
-        ),
-        Agent(
-            name="code-expert",
-            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
-            description="An expert programmer who can help with coding questions and debugging.",
-            system_prompt=(
-                "You are an expert programmer with deep knowledge of multiple languages. "
-                "Help users write better code, debug issues, and explain technical concepts clearly. "
-                "Always provide code examples when relevant."
-            ),
-        ),
-        Agent(
-            name="creative-writer",
-            model=XAI(model="grok-4-1-fast-reasoning") if os.getenv("XAI_API_KEY") else OpenAI(model="gpt-4o-mini"),
-            description="A creative writing assistant for stories, poems, and content creation.",
-            system_prompt=(
-                "You are a creative writing assistant with a flair for storytelling. "
-                "Help users craft engaging narratives, poetry, and creative content. "
-                "Be imaginative, expressive, and encourage creativity."
-            ),
-        ),
-    ]
+# Create AgentOS
+agent_os = create_agent_os(
+    agents_config=agents_config,
+    os_id="chatbot-agent-os",
+    description="AI-powered chatbots with multi-provider LLM support",
+    db_file="chatbot_os.db",
+)
 
-    # Create the server
-    server = AgentServer(
-        agents=agents,
-        title="Chatbot Server with Agent UI",
-        description="AI-powered chatbots compatible with Agent UI",
-        version="1.0.0",
-        cors_origins=["*"],  # Allow all origins for development
-    )
+# Get the FastAPI app
+app = agent_os.get_app()
 
+if __name__ == "__main__":
     print("=" * 60)
-    print("🤖 Chatbot Server Starting")
+    print("🤖 Chatbot Server with AgentOS Starting")
     print("=" * 60)
     print()
-    print(f"Available Agents: {', '.join(agent.name for agent in agents)}")
+    print(f"Available Agents: {', '.join(config['name'] for config in agents_config)}")
     print()
     print("API Endpoints:")
-    print("  - Original API: http://localhost:8000/v1/")
     print("  - Agent UI API: http://localhost:8000/")
     print("  - API Docs: http://localhost:8000/docs")
+    print("  - Health: http://localhost:8000/health")
     print()
     print("Agent UI Integration:")
     print("  1. Navigate to your Agent UI directory")
@@ -84,12 +96,11 @@ def main():
     print("  3. Run: pnpm dev")
     print("  4. Open http://localhost:3000 in your browser")
     print()
+    print("Database:")
+    print("  - Sessions stored in: chatbot_os.db")
+    print()
     print("=" * 60)
     print()
 
-    # Start the server
-    server.serve(host="0.0.0.0", port=8000, reload=False)
-
-
-if __name__ == "__main__":
-    main()
+    # Start the server using uvicorn directly
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
