@@ -16,7 +16,7 @@ In this project directory (`egile-agent-core`):
 
 ```bash
 # Activate virtual environment
-.\agent-core-env\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 
 # Run the chatbot server
 python examples\chatbot_with_agentui.py
@@ -222,6 +222,49 @@ if __name__ == "__main__":
 Run with Gunicorn:
 ```bash
 gunicorn your_module:app --workers 4 --bind 0.0.0.0:8000
+```
+
+## Troubleshooting
+
+### "'str' object has no attribute 'role'" Error
+
+If you see this error when running agents, it means the model adapter is yielding strings instead of `ModelResponse` objects. Custom model adapters must:
+
+1. Import `ModelResponse` from `agno.models.response`
+2. Yield `ModelResponse(content=chunk, role="assistant")` instead of raw strings
+3. Return `AsyncIterator[ModelResponse]` from `ainvoke_stream()`
+
+Example:
+```python
+from agno.models.response import ModelResponse
+
+async def ainvoke_stream(self, messages, **kwargs):
+    async for chunk in self.model.stream(messages):
+        yield ModelResponse(content=chunk, role="assistant")
+```
+
+### Agent UI Can't Connect
+
+- Verify backend is running on port 8000: `http://localhost:8000/health`
+- Check `NEXT_PUBLIC_AGENTOS_URL=http://localhost:8000` in Agent UI's `.env.local`
+- Ensure no firewall is blocking the connection
+
+### Sessions Not Persisting
+
+- Check that `chatbot_os.db` file is being created in your project directory
+- Verify write permissions in the project folder
+
+### Debug Mode
+
+Enable debug logging to see detailed information:
+
+```bash
+# Windows PowerShell
+$env:LOG_LEVEL="DEBUG"
+python examples/chatbot_with_agentui.py
+
+# Linux/Mac
+LOG_LEVEL=DEBUG python examples/chatbot_with_agentui.py
 ```
 
 ## Learn More
