@@ -12,6 +12,7 @@ class LLMResponse:
     content: str
     usage: dict[str, int] | None = None
     raw_response: Any = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -40,22 +41,28 @@ class BaseLLM(ABC):
         return f"{self.provider_name}/{self.model}"
 
     @abstractmethod
-    async def generate(self, messages: list[dict[str, str]]) -> LLMResponse:
+    async def generate(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> LLMResponse:
         """
         Generate a response from the LLM.
 
         Args:
             messages: List of message dictionaries with 'role' and 'content'.
+            tools: Optional list of tool definitions for function calling.
 
         Returns:
             LLMResponse containing the generated content.
         """
         pass
-
-    @abstractmethod
-    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
         """
         Stream a response from the LLM.
+
+        Args:
+            messages: List of message dictionaries with 'role' and 'content'.
+            tools: Optional list of tool definitions for function calling
 
         Args:
             messages: List of message dictionaries with 'role' and 'content'.

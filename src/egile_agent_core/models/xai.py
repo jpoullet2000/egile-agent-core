@@ -63,20 +63,45 @@ class XAI(BaseLLM):
 
         return self._client
 
-    async def generate(self, messages: list[dict[str, str]]) -> LLMResponse:
+    async def generate(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> LLMResponse:
         """Generate a response from xAI."""
         client = self._get_client()
 
         try:
-            response = await client.chat.completions.create(
-                model=self.model,
-                messages=messages,  # type: ignore
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": messages,  # type: ignore
+                "temperature": self.temperature,
                 **self.extra_params,
-            )
+            }
+            
+            if self.max_tokens:
+                api_params["max_tokens"] = self.max_tokens
+                
+            if tools:
+                api_params["tools"] = tools
+                api_params["tool_choice"] = "auto"
+
+            response = await client.chat.completions.create(**api_params)
 
             content = response.choices[0].message.content or ""
+            
+            # Extract tool calls if any
+            tool_calls = []
+            if response.choices[0].message.tool_calls:
+                for tool_call in response.choices[0].message.tool_calls:
+                    tool_calls.append({
+                        "id": tool_call.id,
+                        "type": tool_call.type,
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments,
+                        }
+                    })
+            
             usage = None
             if response.usage:
                 usage = {
@@ -85,24 +110,37 @@ class XAI(BaseLLM):
                     "total_tokens": response.usage.total_tokens,
                 }
 
-            return LLMResponse(content=content, usage=usage, raw_response=response)
+            return LLMResponse(
+                content=content, usage=usage, raw_response=response, tool_calls=tool_calls
+            )
 
         except Exception as e:
             raise ProviderError("xai", f"Failed to generate response: {e}") from e
 
-    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
         """Stream a response from xAI."""
         client = self._get_client()
 
         try:
-            stream = await client.chat.completions.create(
-                model=self.model,
-                messages=messages,  # type: ignore
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                stream=True,
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": messages,  # type: ignore
+                "temperature": self.temperature,
+                "stream": True,
                 **self.extra_params,
-            )
+            }
+            
+            if self.max_tokens:
+                api_params["max_tokens"] = self.max_tokens
+                
+            if tools:
+                api_params["tools"] = tools
+                api_params["tool_choice"] = "auto"
+
+            stream = await client.chat.completions.create(**api_params)
 
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:

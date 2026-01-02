@@ -70,20 +70,45 @@ class Mistral(BaseLLM):
 
         return self._client
 
-    async def generate(self, messages: list[dict[str, str]]) -> LLMResponse:
+    async def generate(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> LLMResponse:
         """Generate a response from Mistral."""
         client = self._get_client()
 
         try:
-            response = await client.chat.complete_async(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
                 **self.extra_params,
-            )
+            }
+            
+            if self.max_tokens:
+                api_params["max_tokens"] = self.max_tokens
+                
+            if tools:
+                api_params["tools"] = tools
+                api_params["tool_choice"] = "auto"
+
+            response = await client.chat.complete_async(**api_params)
 
             content = response.choices[0].message.content or ""
+            
+            # Extract tool calls if any
+            tool_calls = []
+            if hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls:
+                for tool_call in response.choices[0].message.tool_calls:
+                    tool_calls.append({
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments,
+                        }
+                    })
+            
             usage = None
             if response.usage:
                 usage = {
@@ -92,23 +117,36 @@ class Mistral(BaseLLM):
                     "total_tokens": response.usage.total_tokens,
                 }
 
-            return LLMResponse(content=content, usage=usage, raw_response=response)
+            return LLMResponse(
+                content=content, usage=usage, raw_response=response, tool_calls=tool_calls
+            )
 
         except Exception as e:
             raise ProviderError("mistral", f"Failed to generate response: {e}") from e
 
-    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
         """Stream a response from Mistral."""
         client = self._get_client()
 
         try:
-            stream = await client.chat.stream_async(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
                 **self.extra_params,
-            )
+            }
+            
+            if self.max_tokens:
+                api_params["max_tokens"] = self.max_tokens
+                
+            if tools:
+                api_params["tools"] = tools
+                api_params["tool_choice"] = "auto"
+
+            stream = await client.chat.stream_async(**api_params)
 
             async for chunk in stream:
                 if chunk.data.choices and chunk.data.choices[0].delta.content:

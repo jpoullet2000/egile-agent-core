@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -10,6 +12,8 @@ from egile_agent_core.exceptions import AgentError
 if TYPE_CHECKING:
     from egile_agent_core.models.base import BaseLLM
     from egile_agent_core.plugins.base import Plugin
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -69,6 +73,10 @@ class Agent:
         # Add system message if provided
         if self.system_prompt and not self.history:
             self.history.append(Message(role="system", content=self.system_prompt))
+        
+        # Collect tools from plugins
+        self._tools: dict[str, Any] = {}
+        self._tool_schemas: list[dict[str, Any]] = []
 
     async def _execute_plugin_hooks(
         self, hook_name: str, value: str, **kwargs: Any
@@ -102,6 +110,38 @@ class Agent:
     def _build_messages(self) -> list[dict[str, str]]:
         """Build the message list for the LLM."""
         return [msg.to_dict() for msg in self.history]
+    
+    def _register_tools_from_plugins(self) -> None:
+        """Register tools from all plugins."""
+        for plugin in self.plugins:
+            # Get tools from plugin
+            if hasattr(plugin, 'get_tools'):
+                tools = plugin.get_tools()
+                for tool_def in tools:
+                    self._tool_schemas.append(tool_def)
+                    # Store the plugin for later execution
+                    tool_name = tool_def['function']['name']
+                    self._tools[tool_name] = plugin
+                    logger.info(f"Registered tool '{tool_name}' from plugin '{plugin.name}'")
+    
+    async def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        """Execute a tool by name with given arguments."""
+        if tool_name not in self._tools:
+            raise AgentError(f"Tool '{tool_name}' not found")
+        
+        plugin = self._tools[tool_name]
+        
+        # Try to get the method from the plugin
+        if hasattr(plugin, tool_name):
+            method = getattr(plugin, tool_name)
+            try:
+                result = await method(**arguments)
+                return str(result)
+            except Exception as e:
+                logger.error(f"Error executing tool '{tool_name}': {e}")
+                return f"Error: {str(e)}"
+        else:
+            raise AgentError(f"Tool method '{tool_name}' not found in plugin '{plugin.name}'")
 
     def _trim_history(self) -> None:
         """Trim history to max_history messages, preserving system message."""
@@ -134,8 +174,9 @@ class Agent:
         Returns:
             AgentResponse containing the agent's response.
         """
-        # Notify plugins of agent start
+        # Notify plugins of agent start and register tools
         await self._notify_plugins("on_agent_start", agent=self)
+        self._register_tools_from_plugins()
 
         # Pre-process message through plugins
         processed_message = await self._execute_plugin_hooks(
@@ -145,20 +186,68 @@ class Agent:
         # Add user message to history
         self.history.append(Message(role="user", content=processed_message))
 
-        # Generate response from LLM
+        # Generate response from LLM with tools
         messages = self._build_messages()
-        llm_response = await self.model.generate(messages)
-
-        # Extract content from response
-        response_content = llm_response.content
+        tools = self._tool_schemas if self._tool_schemas else None
+        
+        # Tool execution loop
+        max_iterations = 10
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            llm_response = await self.model.generate(messages, tools=tools)
+            
+            # Check if there are tool calls
+            if not llm_response.tool_calls:
+                # No tool calls, we have the final response
+                response_content = llm_response.content
+                break
+            
+            # Execute tool calls
+            logger.info(f"Executing {len(llm_response.tool_calls)} tool call(s)")
+            
+            # Add assistant message with tool calls to history
+            self.history.append(Message(
+                role="assistant",
+                content=llm_response.content or ""
+            ))
+            
+            # Execute each tool and add results
+            for tool_call in llm_response.tool_calls:
+                function_name = tool_call['function']['name']
+                try:
+                    arguments = json.loads(tool_call['function']['arguments'])
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                logger.info(f"Calling tool: {function_name} with args: {arguments}")
+                
+                # Execute the tool
+                tool_result = await self._execute_tool(function_name, arguments)
+                
+                # Add tool result to messages for next iteration
+                # Note: We're storing this in a simplified way in history
+                self.history.append(Message(
+                    role="user",
+                    content=f"Tool '{function_name}' returned: {tool_result}"
+                ))
+            
+            # Rebuild messages for next iteration
+            messages = self._build_messages()
+        
+        if iteration >= max_iterations:
+            response_content = "Maximum tool execution iterations reached."
+            logger.warning("Maximum tool execution iterations reached")
 
         # Post-process response through plugins
         final_content = await self._execute_plugin_hooks(
             "on_response_generated", response_content
         )
 
-        # Add assistant response to history
-        self.history.append(Message(role="assistant", content=final_content))
+        # Add final assistant response to history if not already added
+        if not llm_response.tool_calls:
+            self.history.append(Message(role="assistant", content=final_content))
 
         # Trim history if needed
         self._trim_history()
