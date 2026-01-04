@@ -52,6 +52,7 @@ def create_agent_os(
             - model: BaseLLM instance (XAI, OpenAI, etc.)
             - instructions: List of instruction strings
             - description: Optional agent description
+            - plugins: Optional list of egile plugin instances
         os_id: Unique ID for this AgentOS instance
         description: Description of the AgentOS
         db_file: Path to SQLite database file for session storage
@@ -66,7 +67,27 @@ def create_agent_os(
     agno_agents = []
     for config in agents_config:
         egile_model: BaseLLM = config["model"]
-        agno_model = AgnoModelAdapter(egile_model)
+        
+        # Convert egile plugins to Agno tools
+        tools = []
+        plugins = config.get("plugins", [])
+        for plugin in plugins:
+            if hasattr(plugin, "get_tool_functions"):
+                # Get tool functions from plugin
+                tool_functions = plugin.get_tool_functions()
+                for func_name, func in tool_functions.items():
+                    tools.append(func)
+        
+        # Log registered tools
+        import logging
+        logger = logging.getLogger(__name__)
+        if tools:
+            logger.info(f"Registered {len(tools)} tools for agent '{config['name']}': {[t.__name__ for t in tools]}")
+        else:
+            logger.warning(f"No tools registered for agent '{config['name']}'")
+        
+        # Create adapter with tools so it can execute them
+        agno_model = AgnoModelAdapter(egile_model, tools=tools)
 
         agent = AgnoAgent(
             name=config["name"],
@@ -74,6 +95,7 @@ def create_agent_os(
             db=db,
             instructions=config.get("instructions", []),
             description=config.get("description", ""),
+            tools=tools if tools else None,
             markdown=config.get("markdown", True),
             debug_mode=config.get("debug_mode", False),
         )

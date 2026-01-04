@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterator
 
 from agno.models.base import Model, Message
 from agno.models.response import ModelResponse
@@ -38,14 +39,24 @@ class AgnoModelAdapter(Model):
         ```
     """
 
-    def __init__(self, egile_model: BaseLLM):
+    def __init__(self, egile_model: BaseLLM, tools: list[Callable] | None = None):
         """
         Initialize the adapter with an Egile LLM model.
         
         Args:
             egile_model: Any BaseLLM implementation from egile_agent_core.models
+            tools: Optional list of callable tool functions for execution
         """
         self.egile_model = egile_model
+        self._tool_map: dict[str, Callable] = {}  # Store tools by name for execution
+        
+        # Store tools if provided
+        if tools:
+            for tool in tools:
+                if callable(tool):
+                    self._tool_map[tool.__name__] = tool
+                    logger.info(f"🔧 Registered tool in adapter: {tool.__name__}")
+        
         super().__init__(
             id=egile_model.model,
             name=egile_model.model_name,
@@ -61,6 +72,26 @@ class AgnoModelAdapter(Model):
             "egile_model": self.egile_model.model,
             "temperature": self.egile_model.temperature,
         }
+    
+    def _get_tools_for_api(self, tools: list[Any] | None) -> list[dict[str, Any]] | None:
+        """Convert Agno tools (callables or dicts) to OpenAI API format."""
+        if not tools:
+            return None
+        
+        api_tools = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                # Already in API format
+                api_tools.append(tool)
+            elif callable(tool):
+                # Convert function to API format
+                # Agno functions have __tool_spec__ attribute with OpenAI format
+                if hasattr(tool, '__tool_spec__'):
+                    api_tools.append(tool.__tool_spec__)
+                else:
+                    logger.warning(f"Tool {tool.__name__} has no __tool_spec__")
+        
+        return api_tools if api_tools else None
 
     def invoke(self, messages: list[Message]) -> str:
         """
@@ -82,7 +113,7 @@ class AgnoModelAdapter(Model):
         
         Args:
             messages: List of Agno Message objects.
-            **kwargs: Additional arguments from Agno (ignored by egile models).
+            **kwargs: Additional arguments from Agno (may include tools, functions, etc.).
             
         Returns:
             The assistant's response content.
@@ -111,8 +142,31 @@ class AgnoModelAdapter(Model):
                 # Fallback - convert to string and treat as user message
                 egile_messages.append({"role": "user", "content": str(msg)})
         
-        # Call the egile model
-        response = await self.egile_model.generate(egile_messages)
+        # Extract tools from kwargs if provided by Agno
+        tools = kwargs.get('tools') or kwargs.get('functions')
+        
+        # Log for debugging
+        logger.info(f"🎬 AgnoAdapter.ainvoke called with {len(egile_messages)} messages")
+        logger.info(f"🎬 kwargs keys: {list(kwargs.keys())}")
+        logger.info(f"🎬 tools from kwargs: {bool(tools)} ({len(tools) if tools else 0} tools)")
+        if tools:
+            logger.info(f"🔍 Tool names: {[t.get('function', {}).get('name', '?') if isinstance(t, dict) else '?' for t in tools]}")
+        else:
+            logger.info(f"⚠️ NO TOOLS in kwargs - Agno didn't pass any!")
+        
+        # Call the egile model with tools if available
+        logger.info(f"🎬 Calling egile_model.generate()...")
+        response = await self.egile_model.generate(egile_messages, tools=tools)
+        logger.info(f"🎬 generate() returned, has tool_calls: {bool(response.tool_calls)}")
+        
+        # Log if tool calls were made
+        if response.tool_calls:
+            logger.info(f"🎯 Model returned {len(response.tool_calls)} tool calls!")
+            for tc in response.tool_calls:
+                logger.info(f"🎯 Tool call: {tc.get('function', {}).get('name', '?')}")
+        else:
+            logger.info(f"⚠️ Model did NOT return tool calls")
+        
         return response.content
 
     async def ainvoke_stream(self, messages: list[Message], **kwargs: Any) -> AsyncIterator[ModelResponse]:
@@ -128,15 +182,14 @@ class AgnoModelAdapter(Model):
             ModelResponse objects containing string chunks of the response.
         """
         try:
-            logger.debug(f"ainvoke_stream called with messages type: {type(messages)}")
-            logger.debug(f"Messages: {messages}")
-            logger.debug(f"Kwargs: {kwargs}")
+            logger.info(f"🎬 AgnoAdapter.ainvoke_stream called!")
+            logger.info(f"🎬 kwargs keys: {list(kwargs.keys())}")
             
             # Get the assistant message that Agno wants us to populate
             assistant_message = kwargs.get('assistant_message')
             accumulated_content = []
             
-            # Convert Agno messages to egile format
+            # Convert Agno messages to egile format FIRST
             egile_messages = []
             
             # Handle different message formats
@@ -162,11 +215,148 @@ class AgnoModelAdapter(Model):
                     # Fallback - convert to string and treat as user message
                     egile_messages.append({"role": "user", "content": str(msg)})
             
+            # Extract tools from kwargs if provided by Agno
+            tools = kwargs.get('tools') or kwargs.get('functions')
+            logger.info(f"🎬 tools from kwargs: {bool(tools)} ({len(tools) if tools else 0} tools)")
+            
+            # Log the existing tool_map from __init__
+            logger.info(f"📦 Existing tool_map has {len(self._tool_map)} tools: {list(self._tool_map.keys())}")
+            
+            if tools:
+                logger.info(f"🔍 Tool names: {[t.get('function', {}).get('name', '?') if isinstance(t, dict) else getattr(t, '__name__', '?') for t in tools]}")
+                
+                # Only add to tool_map if we don't already have the tools
+                # DON'T reset self._tool_map - it was populated in __init__!
+                for tool in tools:
+                    if callable(tool):
+                        # Tool is a function - use its name
+                        tool_name = tool.__name__
+                        if tool_name not in self._tool_map:
+                            self._tool_map[tool_name] = tool
+                            logger.info(f"📦 Added callable tool: {tool_name}")
+                    elif isinstance(tool, dict):
+                        # Tool is a dict spec - we already have the callable from __init__
+                        tool_name = tool.get('function', {}).get('name')
+                        if tool_name and tool_name not in self._tool_map:
+                            logger.warning(f"⚠️ Tool {tool_name} is dict spec and not in tool_map")
+                
+                logger.info(f"📦 Final tool_map has {len(self._tool_map)} callable tools: {list(self._tool_map.keys())}")
+            else:
+                logger.info(f"⚠️ NO TOOLS in ainvoke_stream kwargs!")
+            
+            # CRITICAL: When tools are present, use generate() not stream()
+            # Streaming doesn't properly handle tool calls - XAI returns tool_calls in the response
+            # but streaming only yields text chunks
+            if tools:
+                logger.info(f"🔄 SWITCHING to generate() mode because tools are present")
+                response = await self.egile_model.generate(egile_messages, tools=tools)
+                
+                # Check if model returned tool calls
+                if response.tool_calls:
+                    logger.info(f"🎯 Model returned {len(response.tool_calls)} tool calls!")
+                    for tc in response.tool_calls:
+                        logger.info(f"🎯   - {tc.get('function', {}).get('name', '?')}")
+                    
+                    # Set tool calls on the assistant message
+                    if assistant_message is not None:
+                        assistant_message.content = response.content or ""
+                        assistant_message.tool_calls = response.tool_calls
+                        logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message")
+                    
+                    # EXECUTE THE TOOLS OURSELVES since Agno doesn't do it with custom adapters
+                    logger.info(f"🔧 Executing {len(response.tool_calls)} tool calls...")
+                    
+                    # Check if we're calling the same tool consecutively - prevent infinite loops
+                    last_tool_call = getattr(self, '_last_tool_call', None)
+                    last_tool_failed = getattr(self, '_last_tool_failed', False)
+                    current_tool_name = response.tool_calls[0]['function']['name'] if response.tool_calls else None
+                    
+                    # Prevent retrying a tool that just failed OR calling get_last_draft consecutively
+                    if last_tool_call == current_tool_name and (last_tool_failed or current_tool_name in ['get_last_draft', 'get_draft']):
+                        logger.warning(f"⚠️ Preventing consecutive calls to {current_tool_name} (failed={last_tool_failed}) - returning error")
+                        tool_results = [{
+                            "tool_call_id": response.tool_calls[0]['id'],
+                            "role": "tool",
+                            "name": current_tool_name,
+                            "content": f"Error: Tool {current_tool_name} {'already failed' if last_tool_failed else 'cannot be called twice in a row'}. Stop trying to use this tool and respond to the user explaining the issue."
+                        }]
+                        # Reset the failed flag to allow trying again later (but not consecutively)
+                        self._last_tool_failed = False
+                    else:
+                        self._last_tool_call = current_tool_name
+                        self._last_tool_failed = False  # Reset at start of execution
+                        tool_results = []
+                        for tc in response.tool_calls:
+                            tool_name = tc['function']['name']
+                            tool_args_str = tc['function']['arguments']
+                            tool_id = tc['id']
+                            
+                            if tool_name in self._tool_map:
+                                try:
+                                    # Parse arguments
+                                    tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                                    logger.info(f"🔧 Calling {tool_name}({tool_args})")
+                                    
+                                    # Execute tool
+                                    tool_func = self._tool_map[tool_name]
+                                    import inspect
+                                    if inspect.iscoroutinefunction(tool_func):
+                                        result = await tool_func(**tool_args)
+                                    else:
+                                        result = tool_func(**tool_args)
+                                    
+                                    logger.info(f"✅ Tool {tool_name} returned: {str(result)[:100]}")
+                                    tool_results.append({
+                                        "tool_call_id": tool_id,
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": str(result)
+                                    })
+                                except Exception as e:
+                                    logger.error(f"❌ Tool {tool_name} failed: {e}")
+                                    self._last_tool_failed = True  # Mark this tool as failed
+                                    tool_results.append({
+                                        "tool_call_id": tool_id,
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": f"Error: {str(e)}"
+                                    })
+                            else:
+                                logger.error(f"❌ Tool {tool_name} not found in tool_map!")
+                                self._last_tool_failed = True  # Mark as failed
+                    
+                    # Add tool results to messages and call model again
+                    logger.info(f"🔄 Adding {len(tool_results)} tool results to conversation and calling model again")
+                    for result in tool_results:
+                        egile_messages.append(result)
+                    
+                    # Call model again with tool results
+                    response2 = await self.egile_model.generate(egile_messages, tools=self._get_tools_for_api(tools))
+                    
+                    # Yield the final response
+                    if response2.content:
+                        for chunk in response2.content.split():
+                            yield ModelResponse(content=chunk + " ", role="assistant")
+                    
+                    if assistant_message is not None:
+                        assistant_message.content = response2.content
+                    
+                    return
+                else:
+                    logger.info(f"⚠️ Model did NOT return tool calls despite tools being present")
+                    # Yield the text response
+                    if response.content:
+                        yield ModelResponse(content=response.content, role="assistant")
+                    if assistant_message is not None:
+                        assistant_message.content = response.content
+                return
+            
             logger.debug(f"Converted to egile messages: {egile_messages}")
             logger.debug(f"Assistant message before streaming: {assistant_message}")
             
-            # Stream from the egile model
-            async for chunk in self.egile_model.stream(egile_messages):
+            # Stream from the egile model WITH TOOLS
+            logger.info(f"🎬 Calling egile_model.stream() with {len(tools) if tools else 0} tools...")
+            async for chunk in self.egile_model.stream(egile_messages, tools=tools):
                 # Accumulate content if we have an assistant message to populate
                 if assistant_message is not None:
                     accumulated_content.append(chunk)

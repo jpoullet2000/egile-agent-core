@@ -55,6 +55,9 @@ class BaseLLM(ABC):
             LLMResponse containing the generated content.
         """
         pass
+
+    @abstractmethod
+    async def stream(
         self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
     ) -> AsyncIterator[str]:
         """
@@ -62,10 +65,7 @@ class BaseLLM(ABC):
 
         Args:
             messages: List of message dictionaries with 'role' and 'content'.
-            tools: Optional list of tool definitions for function calling
-
-        Args:
-            messages: List of message dictionaries with 'role' and 'content'.
+            tools: Optional list of tool definitions for function calling.
 
         Yields:
             String chunks of the response as they arrive.

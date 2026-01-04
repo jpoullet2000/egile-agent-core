@@ -270,8 +270,9 @@ class Agent:
         Yields:
             String chunks of the response as they arrive.
         """
-        # Notify plugins of agent start
+        # Notify plugins of agent start and register tools
         await self._notify_plugins("on_agent_start", agent=self)
+        self._register_tools_from_plugins()
 
         # Pre-process message through plugins
         processed_message = await self._execute_plugin_hooks(
@@ -281,21 +282,86 @@ class Agent:
         # Add user message to history
         self.history.append(Message(role="user", content=processed_message))
 
-        # Stream response from LLM
+        # Generate response with tool support (non-streaming for tool calls)
         messages = self._build_messages()
+        tools = self._tool_schemas if self._tool_schemas else None
+        
+        # Debug logging
+        if tools:
+            logger.info(f"Registered {len(tools)} tools for LLM: {[t['function']['name'] for t in tools]}")
+        else:
+            logger.warning("No tools registered for this agent!")
+        
+        # Tool execution loop
+        max_iterations = 10
+        iteration = 0
         full_response = ""
-
-        async for chunk in self.model.stream(messages):
-            full_response += chunk
-            yield chunk
+        
+        while iteration < max_iterations:
+            iteration += 1
+            llm_response = await self.model.generate(messages, tools=tools)
+            
+            # Debug logging
+            logger.info(f"LLM response - has tool_calls: {bool(llm_response.tool_calls)}, content length: {len(llm_response.content) if llm_response.content else 0}")
+            
+            # Check if there are tool calls
+            if not llm_response.tool_calls:
+                # No tool calls, stream the final response
+                full_response = llm_response.content
+                yield full_response
+                break
+            
+            # Execute tool calls
+            logger.info(f"Executing {len(llm_response.tool_calls)} tool call(s)")
+            
+            # Add assistant message with tool calls to history
+            self.history.append(Message(
+                role="assistant",
+                content=llm_response.content or ""
+            ))
+            
+            # Yield tool call notification
+            tool_names = [tc['function']['name'] for tc in llm_response.tool_calls]
+            yield f"\n🔧 Executing tools: {', '.join(tool_names)}...\n\n"
+            
+            # Execute each tool and add results
+            for tool_call in llm_response.tool_calls:
+                function_name = tool_call['function']['name']
+                try:
+                    arguments = json.loads(tool_call['function']['arguments'])
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                logger.info(f"Calling tool: {function_name} with args: {arguments}")
+                
+                # Execute the tool
+                tool_result = await self._execute_tool(function_name, arguments)
+                
+                # Yield tool result
+                yield f"**Tool: {function_name}**\n{tool_result}\n\n"
+                
+                # Add tool result to messages for next iteration
+                self.history.append(Message(
+                    role="user",
+                    content=f"Tool '{function_name}' returned: {tool_result}"
+                ))
+            
+            # Rebuild messages for next iteration
+            messages = self._build_messages()
+        
+        if iteration >= max_iterations:
+            full_response = "Maximum tool execution iterations reached."
+            yield full_response
+            logger.warning("Maximum tool execution iterations reached")
 
         # Post-process full response through plugins
         final_content = await self._execute_plugin_hooks(
             "on_response_generated", full_response
         )
 
-        # Add assistant response to history
-        self.history.append(Message(role="assistant", content=final_content))
+        # Add assistant response to history if not already added (from non-tool path)
+        if not llm_response.tool_calls:
+            self.history.append(Message(role="assistant", content=final_content))
 
         # Trim history if needed
         self._trim_history()

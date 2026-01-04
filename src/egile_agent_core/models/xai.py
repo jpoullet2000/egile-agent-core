@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
@@ -10,6 +11,8 @@ from openai import AsyncOpenAI
 from egile_agent_core.config import get_config
 from egile_agent_core.exceptions import ProviderError
 from egile_agent_core.models.base import BaseLLM, LLMResponse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,6 +71,11 @@ class XAI(BaseLLM):
     ) -> LLMResponse:
         """Generate a response from xAI."""
         client = self._get_client()
+        
+        # 🔍 DEBUG: Log if tools are being passed
+        logger.info(f"🔍 XAI.generate called with tools: {tools is not None} ({len(tools) if tools else 0} tools)")
+        if tools:
+            logger.info(f"🔍 Tool names: {[t.get('function', {}).get('name') for t in tools]}")
 
         try:
             # Build API call parameters
@@ -84,15 +92,21 @@ class XAI(BaseLLM):
             if tools:
                 api_params["tools"] = tools
                 api_params["tool_choice"] = "auto"
+                logger.info(f"🔍 Added tools to API params with tool_choice=auto")
 
             response = await client.chat.completions.create(**api_params)
+            
+            logger.info(f"🔍 XAI response - finish_reason: {response.choices[0].finish_reason}")
+            logger.info(f"🔍 Has tool_calls: {hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls is not None}")
 
             content = response.choices[0].message.content or ""
             
             # Extract tool calls if any
             tool_calls = []
             if response.choices[0].message.tool_calls:
+                logger.info(f"🎯 XAI returned {len(response.choices[0].message.tool_calls)} tool calls!")
                 for tool_call in response.choices[0].message.tool_calls:
+                    logger.info(f"🎯 Tool call: {tool_call.function.name}")
                     tool_calls.append({
                         "id": tool_call.id,
                         "type": tool_call.type,
@@ -101,6 +115,8 @@ class XAI(BaseLLM):
                             "arguments": tool_call.function.arguments,
                         }
                     })
+            else:
+                logger.info(f"⚠️ XAI did NOT return tool calls, just text content")
             
             usage = None
             if response.usage:
@@ -122,6 +138,10 @@ class XAI(BaseLLM):
     ) -> AsyncIterator[str]:
         """Stream a response from xAI."""
         client = self._get_client()
+        
+        logger.info(f"🔍 XAI.stream called with tools: {tools is not None} ({len(tools) if tools else 0} tools)")
+        if tools:
+            logger.info(f"🔍 Tool names: {[t.get('function', {}).get('name') for t in tools]}")
 
         try:
             # Build API call parameters
@@ -139,12 +159,27 @@ class XAI(BaseLLM):
             if tools:
                 api_params["tools"] = tools
                 api_params["tool_choice"] = "auto"
+                logger.info(f"🔍 Added tools to stream API params with tool_choice=auto")
 
             stream = await client.chat.completions.create(**api_params)
+            
+            tool_calls_detected = False
 
             async for chunk in stream:
+                # Check for tool calls in the stream
+                if chunk.choices and chunk.choices[0].delta.tool_calls:
+                    if not tool_calls_detected:
+                        logger.info(f"🎯 XAI is returning TOOL CALLS in stream!")
+                        tool_calls_detected = True
+                    # Tool calls are being made - we can't handle them in streaming mode
+                    # The streaming API doesn't support tool execution
+                    continue
+                    
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+            
+            if not tool_calls_detected:
+                logger.info(f"⚠️ XAI stream completed with NO tool calls")
 
         except Exception as e:
             raise ProviderError("xai", f"Failed to stream response: {e}") from e
