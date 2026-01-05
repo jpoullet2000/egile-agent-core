@@ -263,7 +263,20 @@ class AgnoModelAdapter(Model):
                         assistant_message.tool_calls = response.tool_calls
                         logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message")
                     
-                    # EXECUTE THE TOOLS OURSELVES since Agno doesn't do it with custom adapters
+                    # Check if ALL tool calls are in our tool_map
+                    # If ANY tool is NOT in our map, it's an Agno-managed tool (like delegate_task_to_member)
+                    # In that case, return the tool calls to Agno and let Agno execute them
+                    all_tools_in_map = all(
+                        tc['function']['name'] in self._tool_map 
+                        for tc in response.tool_calls
+                    )
+                    
+                    if not all_tools_in_map:
+                        logger.info(f"🔄 Some tools are Agno-managed (not in tool_map) - returning to Agno for execution")
+                        # Just return - Agno will see the tool_calls on assistant_message and execute them
+                        return
+                    
+                    # All tools are in our map - execute them ourselves
                     logger.info(f"🔧 Executing {len(response.tool_calls)} tool calls...")
                     
                     # Check if we're calling the same tool consecutively - prevent infinite loops
@@ -291,39 +304,35 @@ class AgnoModelAdapter(Model):
                             tool_args_str = tc['function']['arguments']
                             tool_id = tc['id']
                             
-                            if tool_name in self._tool_map:
-                                try:
-                                    # Parse arguments
-                                    tool_args = json.loads(tool_args_str) if tool_args_str else {}
-                                    logger.info(f"🔧 Calling {tool_name}({tool_args})")
-                                    
-                                    # Execute tool
-                                    tool_func = self._tool_map[tool_name]
-                                    import inspect
-                                    if inspect.iscoroutinefunction(tool_func):
-                                        result = await tool_func(**tool_args)
-                                    else:
-                                        result = tool_func(**tool_args)
-                                    
-                                    logger.info(f"✅ Tool {tool_name} returned: {str(result)[:100]}")
-                                    tool_results.append({
-                                        "tool_call_id": tool_id,
-                                        "role": "tool",
-                                        "name": tool_name,
-                                        "content": str(result)
-                                    })
-                                except Exception as e:
-                                    logger.error(f"❌ Tool {tool_name} failed: {e}")
-                                    self._last_tool_failed = True  # Mark this tool as failed
-                                    tool_results.append({
-                                        "tool_call_id": tool_id,
-                                        "role": "tool",
-                                        "name": tool_name,
-                                        "content": f"Error: {str(e)}"
-                                    })
-                            else:
-                                logger.error(f"❌ Tool {tool_name} not found in tool_map!")
-                                self._last_tool_failed = True  # Mark as failed
+                            try:
+                                # Parse arguments
+                                tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                                logger.info(f"🔧 Calling {tool_name}({tool_args})")
+                                
+                                # Execute tool
+                                tool_func = self._tool_map[tool_name]
+                                import inspect
+                                if inspect.iscoroutinefunction(tool_func):
+                                    result = await tool_func(**tool_args)
+                                else:
+                                    result = tool_func(**tool_args)
+                                
+                                logger.info(f"✅ Tool {tool_name} returned: {str(result)[:100]}")
+                                tool_results.append({
+                                    "tool_call_id": tool_id,
+                                    "role": "tool",
+                                    "name": tool_name,
+                                    "content": str(result)
+                                })
+                            except Exception as e:
+                                logger.error(f"❌ Tool {tool_name} failed: {e}")
+                                self._last_tool_failed = True  # Mark this tool as failed
+                                tool_results.append({
+                                    "tool_call_id": tool_id,
+                                    "role": "tool",
+                                    "name": tool_name,
+                                    "content": f"Error: {str(e)}"
+                                })
                     
                     # Add tool results to messages and call model again
                     logger.info(f"🔄 Adding {len(tool_results)} tool results to conversation and calling model again")
