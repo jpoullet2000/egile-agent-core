@@ -86,7 +86,7 @@ def create_agent_os(
         else:
             logger.warning(f"No tools registered for agent '{config['name']}'")
         
-        # Create adapter with tools so it can execute them
+        # Create adapter with tools
         agno_model = AgnoModelAdapter(egile_model, tools=tools)
 
         agent = AgnoAgent(
@@ -95,7 +95,7 @@ def create_agent_os(
             db=db,
             instructions=config.get("instructions", []),
             description=config.get("description", ""),
-            tools=tools if tools else None,
+            tools=tools,
             markdown=config.get("markdown", True),
             debug_mode=config.get("debug_mode", False),
         )
