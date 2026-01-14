@@ -45,24 +45,23 @@ class AgnoModelAdapter(Model):
         
         Args:
             egile_model: Any BaseLLM implementation from egile_agent_core.models
-            tools: Optional list of callable tool functions for execution
+            tools: Optional list of callable tool functions (stored for reference)
         """
         self.egile_model = egile_model
-        self._tool_map: dict[str, Callable] = {}  # Store tools by name for execution
+        self._tool_map: dict[str, Callable] = {}  # Store tools by name for reference
         
         # Store tools if provided
         if tools:
             for tool in tools:
                 if callable(tool):
                     self._tool_map[tool.__name__] = tool
-                    logger.info(f"🔧 Registered tool in adapter: {tool.__name__}")
         
         super().__init__(
             id=egile_model.model,
             name=egile_model.model_name,
             provider=egile_model.provider_name,
         )
-
+    
     def to_dict(self) -> dict[str, Any]:
         """Return model configuration as dictionary."""
         return {
