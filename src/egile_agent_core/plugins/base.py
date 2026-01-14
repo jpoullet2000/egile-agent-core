@@ -66,6 +66,16 @@ class Plugin(ABC):
         """
         return "0.1.0"
 
+    @property
+    def mcp_server_module(self) -> str | None:
+        """
+        Python module path for the MCP server (if applicable).
+
+        Returns:
+            Module path (e.g., "egile_mcp_prospectfinder.server") or None if no MCP server.
+        """
+        return None
+
     async def on_agent_start(self, agent: Agent) -> None:
         """
         Called when the agent starts processing a request.
