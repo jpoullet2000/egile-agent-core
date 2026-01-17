@@ -75,7 +75,16 @@ class XAI(BaseLLM):
         # 🔍 DEBUG: Log if tools are being passed
         logger.info(f"🔍 XAI.generate called with tools: {tools is not None} ({len(tools) if tools else 0} tools)")
         if tools:
-            logger.info(f"🔍 Tool names: {[t.get('function', {}).get('name') for t in tools]}")
+            # Handle both dict format (OpenAI-style) and function objects
+            tool_names = []
+            for t in tools:
+                if isinstance(t, dict):
+                    tool_names.append(t.get('function', {}).get('name', 'unknown'))
+                elif callable(t):
+                    tool_names.append(getattr(t, '__name__', 'unknown'))
+                else:
+                    tool_names.append(str(type(t)))
+            logger.info(f"🔍 Tool names: {tool_names}")
 
         try:
             # Build API call parameters
@@ -90,9 +99,48 @@ class XAI(BaseLLM):
                 api_params["max_tokens"] = self.max_tokens
                 
             if tools:
-                api_params["tools"] = tools
+                # Convert tools to OpenAI format if they're function objects
+                formatted_tools = []
+                for tool in tools:
+                    if isinstance(tool, dict):
+                        # Already in correct format
+                        formatted_tools.append(tool)
+                    elif callable(tool):
+                        # Convert function to OpenAI format
+                        # Check if tool has __tool_spec__ attribute (Agno format)
+                        if hasattr(tool, '__tool_spec__'):
+                            formatted_tools.append(tool.__tool_spec__)
+                        else:
+                            # Generate basic spec from function
+                            import inspect
+                            sig = inspect.signature(tool)
+                            parameters = {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            }
+                            
+                            for param_name, param in sig.parameters.items():
+                                if param_name == 'self':
+                                    continue
+                                parameters["properties"][param_name] = {"type": "string"}
+                                if param.default == inspect.Parameter.empty:
+                                    parameters["required"].append(param_name)
+                            
+                            formatted_tools.append({
+                                "type": "function",
+                                "function": {
+                                    "name": tool.__name__.lstrip('_'),
+                                    "description": tool.__doc__ or f"Function {tool.__name__}",
+                                    "parameters": parameters
+                                }
+                            })
+                    else:
+                        logger.warning(f"Unknown tool format: {type(tool)}")
+                
+                api_params["tools"] = formatted_tools
                 api_params["tool_choice"] = "auto"
-                logger.info(f"🔍 Added tools to API params with tool_choice=auto")
+                logger.info(f"🔍 Added {len(formatted_tools)} formatted tools to API params")
 
             response = await client.chat.completions.create(**api_params)
             

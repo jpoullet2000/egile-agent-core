@@ -54,7 +54,12 @@ class AgnoModelAdapter(Model):
         if tools:
             for tool in tools:
                 if callable(tool):
+                    # Store with both original name and stripped name (without leading _)
                     self._tool_map[tool.__name__] = tool
+                    # Also store with stripped name for API compatibility
+                    stripped_name = tool.__name__.lstrip('_')
+                    if stripped_name != tool.__name__:
+                        self._tool_map[stripped_name] = tool
         
         super().__init__(
             id=egile_model.model,
@@ -74,6 +79,8 @@ class AgnoModelAdapter(Model):
     
     def _get_tools_for_api(self, tools: list[Any] | None) -> list[dict[str, Any]] | None:
         """Convert Agno tools (callables or dicts) to OpenAI API format."""
+        import inspect
+        
         if not tools:
             return None
         
@@ -88,7 +95,68 @@ class AgnoModelAdapter(Model):
                 if hasattr(tool, '__tool_spec__'):
                     api_tools.append(tool.__tool_spec__)
                 else:
-                    logger.warning(f"Tool {tool.__name__} has no __tool_spec__")
+                    # Generate OpenAI function spec from function signature
+                    logger.info(f"Generating tool spec for {tool.__name__}")
+                    sig = inspect.signature(tool)
+                    parameters = {}
+                    required = []
+                    
+                    for param_name, param in sig.parameters.items():
+                        if param_name == 'self':
+                            continue
+                        
+                        param_spec = {"type": "string"}  # Default to string
+                        
+                        # Try to infer type from annotation
+                        if param.annotation != inspect.Parameter.empty:
+                            ann = param.annotation
+                            # Handle Optional types
+                            if hasattr(ann, '__origin__'):
+                                if ann.__origin__ is type(None) or str(ann).startswith('typing.Optional'):
+                                    # Extract the actual type from Optional[Type]
+                                    args = getattr(ann, '__args__', ())
+                                    if args:
+                                        ann = args[0] if args[0] is not type(None) else (args[1] if len(args) > 1 else str)
+                            
+                            if ann == int or ann == 'int':
+                                param_spec["type"] = "integer"
+                            elif ann == float or ann == 'float' or param_name in ['shares', 'purchase_price', 'min_market_cap', 'max_pe', 'min_dividend_yield']:
+                                param_spec["type"] = "number"
+                            elif ann == bool or ann == 'bool':
+                                param_spec["type"] = "boolean"
+                            elif ann == str or ann == 'str':
+                                param_spec["type"] = "string"
+                        
+                        # Infer from parameter name patterns
+                        if param_spec["type"] == "string":
+                            if any(keyword in param_name.lower() for keyword in ['price', 'cap', 'shares', 'yield', 'pe', 'ratio', 'min_', 'max_', 'limit']):
+                                param_spec["type"] = "number"
+                        
+                        # Add description from docstring if available
+                        if tool.__doc__:
+                            param_spec["description"] = f"Parameter {param_name}"
+                        
+                        parameters[param_name] = param_spec
+                        
+                        # Mark as required if no default value
+                        if param.default == inspect.Parameter.empty:
+                            required.append(param_name)
+                    
+                    # Create OpenAI function spec
+                    tool_spec = {
+                        "type": "function",
+                        "function": {
+                            "name": tool.__name__.lstrip('_'),  # Remove leading underscore
+                            "description": tool.__doc__ or f"Function {tool.__name__}",
+                            "parameters": {
+                                "type": "object",
+                                "properties": parameters,
+                                "required": required,
+                            }
+                        }
+                    }
+                    api_tools.append(tool_spec)
+                    logger.info(f"Generated spec for {tool.__name__}: {tool_spec['function']['name']}")
         
         return api_tools if api_tools else None
 
@@ -248,115 +316,130 @@ class AgnoModelAdapter(Model):
             # but streaming only yields text chunks
             if tools:
                 logger.info(f"🔄 SWITCHING to generate() mode because tools are present")
-                response = await self.egile_model.generate(egile_messages, tools=tools)
+                # Convert tools to API format if needed (handles both callables and dicts)
+                api_tools = self._get_tools_for_api(tools)
+                logger.info(f"🔧 Converted to {len(api_tools) if api_tools else 0} API format tools")
                 
-                # Check if model returned tool calls
-                if response.tool_calls:
-                    logger.info(f"🎯 Model returned {len(response.tool_calls)} tool calls!")
-                    for tc in response.tool_calls:
-                        logger.info(f"🎯   - {tc.get('function', {}).get('name', '?')}")
+                # Tool execution loop - handle multiple rounds of tool calls
+                max_iterations = 5
+                iteration = 0
+                response = None
+                
+                while iteration < max_iterations:
+                    iteration += 1
+                    logger.info(f"🔄 Tool execution iteration {iteration}/{max_iterations}")
                     
-                    # Set tool calls on the assistant message
-                    if assistant_message is not None:
-                        assistant_message.content = response.content or ""
-                        assistant_message.tool_calls = response.tool_calls
-                        logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message")
-                    
-                    # Check if ALL tool calls are in our tool_map
-                    # If ANY tool is NOT in our map, it's an Agno-managed tool (like delegate_task_to_member)
-                    # In that case, return the tool calls to Agno and let Agno execute them
-                    all_tools_in_map = all(
-                        tc['function']['name'] in self._tool_map 
-                        for tc in response.tool_calls
+                    # Call model (with or without tools depending on iteration)
+                    should_allow_tools = iteration < max_iterations
+                    response = await self.egile_model.generate(
+                        egile_messages, 
+                        tools=api_tools if should_allow_tools else None
                     )
                     
-                    if not all_tools_in_map:
-                        logger.info(f"🔄 Some tools are Agno-managed (not in tool_map) - returning to Agno for execution")
-                        # Just return - Agno will see the tool_calls on assistant_message and execute them
-                        return
-                    
-                    # All tools are in our map - execute them ourselves
-                    logger.info(f"🔧 Executing {len(response.tool_calls)} tool calls...")
-                    
-                    # Check if we're calling the same tool consecutively - prevent infinite loops
-                    last_tool_call = getattr(self, '_last_tool_call', None)
-                    last_tool_failed = getattr(self, '_last_tool_failed', False)
-                    current_tool_name = response.tool_calls[0]['function']['name'] if response.tool_calls else None
-                    
-                    # Prevent retrying a tool that just failed OR calling get_last_draft consecutively
-                    if last_tool_call == current_tool_name and (last_tool_failed or current_tool_name in ['get_last_draft', 'get_draft']):
-                        logger.warning(f"⚠️ Preventing consecutive calls to {current_tool_name} (failed={last_tool_failed}) - returning error")
-                        tool_results = [{
-                            "tool_call_id": response.tool_calls[0]['id'],
-                            "role": "tool",
-                            "name": current_tool_name,
-                            "content": f"Error: Tool {current_tool_name} {'already failed' if last_tool_failed else 'cannot be called twice in a row'}. Stop trying to use this tool and respond to the user explaining the issue."
-                        }]
-                        # Reset the failed flag to allow trying again later (but not consecutively)
-                        self._last_tool_failed = False
-                    else:
-                        self._last_tool_call = current_tool_name
-                        self._last_tool_failed = False  # Reset at start of execution
-                        tool_results = []
+                    # Check if model returned tool calls
+                    if response.tool_calls:
+                        logger.info(f"🎯 Model returned {len(response.tool_calls)} tool calls!")
                         for tc in response.tool_calls:
-                            tool_name = tc['function']['name']
-                            tool_args_str = tc['function']['arguments']
-                            tool_id = tc['id']
-                            
-                            try:
-                                # Parse arguments
-                                tool_args = json.loads(tool_args_str) if tool_args_str else {}
-                                logger.info(f"🔧 Calling {tool_name}({tool_args})")
+                            logger.info(f"🎯   - {tc.get('function', {}).get('name', '?')}")
+                        
+                        # Set tool calls on the assistant message
+                        if assistant_message is not None:
+                            assistant_message.content = response.content or ""
+                            assistant_message.tool_calls = response.tool_calls
+                            logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message")
+                        
+                        # Check if ALL tool calls are in our tool_map
+                        # If ANY tool is NOT in our map, it's an Agno-managed tool (like delegate_task_to_member)
+                        # In that case, return the tool calls to Agno and let Agno execute them
+                        all_tools_in_map = all(
+                            tc['function']['name'] in self._tool_map 
+                            for tc in response.tool_calls
+                        )
+                        
+                        if not all_tools_in_map:
+                            logger.info(f"🔄 Some tools are Agno-managed (not in tool_map) - returning to Agno for execution")
+                            # Just return - Agno will see the tool_calls on assistant_message and execute them
+                            return
+                        
+                        # All tools are in our map - execute them ourselves
+                        logger.info(f"🔧 Executing {len(response.tool_calls)} tool calls...")
+                        
+                        # Check if we're calling the same tool consecutively - prevent infinite loops
+                        last_tool_call = getattr(self, '_last_tool_call', None)
+                        last_tool_failed = getattr(self, '_last_tool_failed', False)
+                        current_tool_name = response.tool_calls[0]['function']['name'] if response.tool_calls else None
+                        
+                        # Prevent retrying a tool that just failed OR calling get_last_draft consecutively
+                        if last_tool_call == current_tool_name and (last_tool_failed or current_tool_name in ['get_last_draft', 'get_draft']):
+                            logger.warning(f"⚠️ Preventing consecutive calls to {current_tool_name} (failed={last_tool_failed}) - returning error")
+                            tool_results = [{
+                                "tool_call_id": response.tool_calls[0]['id'],
+                                "role": "tool",
+                                "name": current_tool_name,
+                                "content": f"Error: Tool {current_tool_name} {'already failed' if last_tool_failed else 'cannot be called twice in a row'}. Stop trying to use this tool and respond to the user explaining the issue."
+                            }]
+                            # Reset the failed flag to allow trying again later (but not consecutively)
+                            self._last_tool_failed = False
+                        else:
+                            self._last_tool_call = current_tool_name
+                            self._last_tool_failed = False  # Reset at start of execution
+                            tool_results = []
+                            for tc in response.tool_calls:
+                                tool_name = tc['function']['name']
+                                tool_args_str = tc['function']['arguments']
+                                tool_id = tc['id']
                                 
-                                # Execute tool
-                                tool_func = self._tool_map[tool_name]
-                                import inspect
-                                if inspect.iscoroutinefunction(tool_func):
-                                    result = await tool_func(**tool_args)
-                                else:
-                                    result = tool_func(**tool_args)
-                                
-                                logger.info(f"✅ Tool {tool_name} returned: {str(result)[:100]}")
-                                tool_results.append({
-                                    "tool_call_id": tool_id,
-                                    "role": "tool",
-                                    "name": tool_name,
-                                    "content": str(result)
-                                })
-                            except Exception as e:
-                                logger.error(f"❌ Tool {tool_name} failed: {e}")
-                                self._last_tool_failed = True  # Mark this tool as failed
-                                tool_results.append({
-                                    "tool_call_id": tool_id,
-                                    "role": "tool",
-                                    "name": tool_name,
-                                    "content": f"Error: {str(e)}"
-                                })
+                                try:
+                                    # Parse arguments
+                                    tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                                    logger.info(f"🔧 Calling {tool_name}({tool_args})")
+                                    
+                                    # Execute tool
+                                    tool_func = self._tool_map[tool_name]
+                                    import inspect
+                                    if inspect.iscoroutinefunction(tool_func):
+                                        result = await tool_func(**tool_args)
+                                    else:
+                                        result = tool_func(**tool_args)
+                                    
+                                    logger.info(f"✅ Tool {tool_name} returned: {str(result)[:100]}")
+                                    tool_results.append({
+                                        "tool_call_id": tool_id,
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": str(result)
+                                    })
+                                except Exception as e:
+                                    logger.error(f"❌ Tool {tool_name} failed: {e}")
+                                    self._last_tool_failed = True  # Mark this tool as failed
+                                    tool_results.append({
+                                        "tool_call_id": tool_id,
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": f"Error: {str(e)}"
+                                    })
+                        
+                        # Add tool results to messages for next iteration
+                        logger.info(f"🔄 Adding {len(tool_results)} tool results to conversation")
+                        for result in tool_results:
+                            egile_messages.append(result)
+                        
+                        # Continue to next iteration
+                        continue
                     
-                    # Add tool results to messages and call model again
-                    logger.info(f"🔄 Adding {len(tool_results)} tool results to conversation and calling model again")
-                    for result in tool_results:
-                        egile_messages.append(result)
-                    
-                    # Call model again with tool results
-                    response2 = await self.egile_model.generate(egile_messages, tools=self._get_tools_for_api(tools))
-                    
-                    # Yield the final response
-                    if response2.content:
-                        for chunk in response2.content.split():
-                            yield ModelResponse(content=chunk + " ", role="assistant")
-                    
-                    if assistant_message is not None:
-                        assistant_message.content = response2.content
-                    
-                    return
-                else:
-                    logger.info(f"⚠️ Model did NOT return tool calls despite tools being present")
-                    # Yield the text response
-                    if response.content:
-                        yield ModelResponse(content=response.content, role="assistant")
-                    if assistant_message is not None:
-                        assistant_message.content = response.content
+                    # No more tool calls - we have final response
+                    logger.info(f"✅ Model returned final response (no tool calls)")
+                    break
+                
+                # After loop, yield the final response
+                if response and response.content:
+                    logger.info(f"📝 Yielding final response: {len(response.content)} characters")
+                    for chunk in response.content.split():
+                        yield ModelResponse(content=chunk + " ", role="assistant")
+                
+                if assistant_message is not None and response:
+                    assistant_message.content = response.content
+                
                 return
             
             logger.debug(f"Converted to egile messages: {egile_messages}")
