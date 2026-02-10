@@ -343,10 +343,11 @@ class AgnoModelAdapter(Model):
                             logger.info(f"🎯   - {tc.get('function', {}).get('name', '?')}")
                         
                         # Set tool calls on the assistant message
+                        # CRITICAL: Don't set content here - only set it on the FINAL response
+                        # Setting content now would cause the UI to show intermediate responses
                         if assistant_message is not None:
-                            assistant_message.content = response.content or ""
                             assistant_message.tool_calls = response.tool_calls
-                            logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message")
+                            logger.info(f"✅ Set {len(response.tool_calls)} tool_calls on assistant_message (content will be set on final response)")
                         
                         # Check if ALL tool calls are in our tool_map
                         # If ANY tool is NOT in our map, it's an Agno-managed tool (like delegate_task_to_member)
@@ -434,8 +435,12 @@ class AgnoModelAdapter(Model):
                 # After loop, yield the final response
                 if response and response.content:
                     logger.info(f"📝 Yielding final response: {len(response.content)} characters")
-                    for chunk in response.content.split():
-                        yield ModelResponse(content=chunk + " ", role="assistant")
+                    # Stream response in reasonable chunks (by lines for better markdown rendering)
+                    lines = response.content.split('\n')
+                    for i, line in enumerate(lines):
+                        # Add newline back except for last line
+                        chunk = line + '\n' if i < len(lines) - 1 else line
+                        yield ModelResponse(content=chunk, role="assistant")
                 
                 if assistant_message is not None and response:
                     assistant_message.content = response.content
